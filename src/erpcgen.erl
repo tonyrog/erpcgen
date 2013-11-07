@@ -31,6 +31,7 @@
 -behavior(application).
 
 -export([start/0, start/2]).
+-export([stop/1]).
 -export([file/1, file/2, file/3]).
 
 -import(lists, [map/2, filter/2, foreach/2, reverse/1]).
@@ -54,10 +55,14 @@ start(normal, []) ->
 	[ok,ok,ok,ok,ok] ->
 	    %% io:format("Compilation of ~s successful\n", [InFile]),
 	    {error, 'Compilation successful'};	% For application behavior.
-	Error ->
+	_Error ->
 	    %% Error is too complex to figure out.  Let user figure it out.
 	    {error, 'Compilation failed'}	% For application behavior.
     end.
+
+stop(_State) ->
+    ok.
+    
 
 file(File) ->
     file(File, [all]).
@@ -68,7 +73,7 @@ file(File, Opts) ->
 file(In, Out, Opts) ->
     file1(In, Out, trans_opts(Opts)).
 
-file1(In, Out, {error,Reason}) -> {error, Reason};
+file1(_In, _Out, {error,Reason}) -> {error, Reason};
 file1(In, Out, {ok, Opts}) when is_atom(In), is_atom(Out) ->
     File = atom_to_list(In) ++ ".x",
     Base = atom_to_list(Out),
@@ -146,11 +151,11 @@ add_opts([Opt|Opts], L) ->
 add_opts([], L) -> L.
 
 
-emit_list(L) ->
-    io:format("------------------------------------\n"),
-    foreach(fun(E) ->
-		    io:format("~p~n", [E])
-	    end, L).
+%% emit_list(L) ->
+%%     io:format("------------------------------------\n"),
+%%     foreach(fun(E) ->
+%% 		    io:format("~p~n", [E])
+%% 	    end, L).
 %%
 %% Month conversion
 %%
@@ -200,7 +205,7 @@ gen_xdr(Base, Spec, Env, Opts) ->
 gen_xdr_inc(Base, Spec, Env, Opts) ->
     gen_xdr_base(Base, Spec, Env, Opts, inc).
 
-gen_xdr_base(Base, Spec, Env, Opts, Type) ->
+gen_xdr_base(Base, Spec, _Env, Opts, Type) ->
     Module = Base ++ "_xdr",
     File = if Type == mod -> Module ++ ".erl";
 	      Type == inc -> Module ++ ".hrl"
@@ -226,7 +231,7 @@ gen_xdr_base(Base, Spec, Env, Opts, Type) ->
 	    {error, Reason}
     end.
 
-gen_xdr_base(Fd, Base, Spec, Type) ->
+gen_xdr_base(Fd, _Base, Spec, Type) ->
     if Type == mod ->
 	    foreach(
 	      fun({type,Id,_}) ->
@@ -239,18 +244,19 @@ gen_xdr_base(Fd, Base, Spec, Type) ->
     end,
     put(type_module, []),
     foreach(
-      fun({type,Id,Type}) ->
-	      [Enc] = xdrgen:encode({type,Id,Type}, []),
+      fun({type,Id,Typei}) ->
+	      [Enc] = xdrgen:encode({type,Id,Typei}, []),
 	      emit_fun(Fd, Enc),
 	      foreach(fun(Dec) -> emit_fun(Fd, Dec) end,
-		      xdrgen:decode({type,Id,Type}, []));
+		      xdrgen:decode({type,Id,Typei}, []));
 	 (_) ->
 	      true
       end, Spec),
     gen_map_elem(get(map_elem), Fd),
-    gen_io_list_len(get(io_list_len), Fd),
-    gen_enc_align(get(enc_align), Fd),
-    gen_align(get(align), Fd).
+    %% gen_io_list_len(get(io_list_len), Fd),
+    %% gen_enc_align(get(enc_align), Fd),
+    %% gen_align(get(align), Fd).
+    ok.
 
 
 gen_map_elem(true, Fd) ->
@@ -268,47 +274,50 @@ gen_map_elem(true, Fd) ->
 gen_map_elem(_, _Fd) ->
     ok.
 
-gen_io_list_len(true, Fd) ->
-    io:format(Fd,
-	      "\nio_list_len(L) -> io_list_len(L, 0).\n"
-	      "io_list_len([H|T], N) ->\n"
-	      "  if\n"
-	      "    H >= 0, H =< 255 -> io_list_len(T, N+1);\n"
-	      "    is_list(H) -> io_list_len(T, io_list_len(H,N));\n"
-	      "    is_binary(H) -> io_list_len(T, size(H) + N);\n"
-	      "    true -> exit({xdr, opaque})\n"
-	      "  end;\n"
-	      "io_list_len(H, N) when is_binary(H) ->\n"
-	      "  size(H) + N;\n"
-	      "io_list_len([], N) ->\n"
-	      "N.\n", []);
-gen_io_list_len(_, _Fd) ->
-    ok.
+%%% replaced by erlang:iolist_size(List)
+%% gen_io_list_len(true, Fd) ->
+%%     io:format(Fd,
+%% 	      "\nio_list_len(L) -> io_list_len(L, 0).\n"
+%% 	      "io_list_len([H|T], N) ->\n"
+%% 	      "  if\n"
+%% 	      "    H >= 0, H =< 255 -> io_list_len(T, N+1);\n"
+%% 	      "    is_list(H) -> io_list_len(T, io_list_len(H,N));\n"
+%% 	      "    is_binary(H) -> io_list_len(T, size(H) + N);\n"
+%% 	      "    true -> exit({xdr, opaque})\n"
+%% 	      "  end;\n"
+%% 	      "io_list_len(H, N) when is_binary(H) ->\n"
+%% 	      "  size(H) + N;\n"
+%% 	      "io_list_len([], N) ->\n"
+%% 	      "N.\n", []);
+%% gen_io_list_len(_, _Fd) ->
+%%     ok.
 
 
-gen_enc_align(true, Fd) ->
-    io:format(Fd,
-	      "\nenc_align(Len) ->\n"
-	      "  case Len rem 4 of\n"
-	      "    0 -> <<>>;\n"
-	      "    1 -> <<0,0,0>>;\n"
-	      "    2 -> <<0,0>>;\n"
-	      "    3 -> <<0>>\n"
-	      "  end.\n", []);
-gen_enc_align(_, _Fd) ->
-    ok.
+%% replace by:  <<0:((4-(Len band 3)) band 3)/unit:8>>
+%% gen_enc_align(true, Fd) ->
+%%     io:format(Fd,
+%% 	      "\nenc_align(Len) ->\n"
+%% 	      "  case Len rem 4 of\n"
+%% 	      "    0 -> <<>>;\n"
+%% 	      "    1 -> <<0,0,0>>;\n"
+%% 	      "    2 -> <<0,0>>;\n"
+%% 	      "    3 -> <<0>>\n"
+%% 	      "  end.\n", []);
+%% gen_enc_align(_, _Fd) ->
+%%     ok.
 
-gen_align(true, Fd) ->
-    io:format(Fd,
-	      "\nalign(Len) ->\n"
-	      "  case Len rem 4 of\n"
-	      "    0 -> Len;\n"
-	      "    1 -> Len+3;\n"
-	      "    2 -> Len+2;\n"
-	      "    3 -> Len+1\n"
-	      "  end.\n", []);
-gen_align(_, _Fd) ->
-    ok.
+%% rplaced by: Len + ((4-(Len band 3)) band 3)
+%% gen_align(true, Fd) ->
+%%     io:format(Fd,
+%% 	      "\nalign(Len) ->\n"
+%% 	      "  case Len rem 4 of\n"
+%% 	      "    0 -> Len;\n"
+%% 	      "    1 -> Len+3;\n"
+%% 	      "    2 -> Len+2;\n"
+%% 	      "    3 -> Len+1\n"
+%% 	      "  end.\n", []);
+%% gen_align(_, _Fd) ->
+%%     ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%
@@ -318,7 +327,7 @@ gen_align(_, _Fd) ->
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-gen_clnt(Base, Spec, Env, Opts) ->
+gen_clnt(Base, Spec, _Env, Opts) ->
     Module = Base ++ "_clnt",
     File = Module ++ ".erl",
     case file:open(File, write) of
@@ -339,11 +348,11 @@ gen_clnt(Base, Spec, Env, Opts) ->
 
 gen_clnt(Fd, Base, Spec) ->
     foreach(
-      fun ({program,_,Prog,Vs}) ->
+      fun ({program,_,_Prog,Vs}) ->
 	      foreach(
 		fun({version,_,Ver,Ps}) ->
 			foreach(
-			  fun({procedure,Id,Proc,_,As}) ->
+			  fun({procedure,Id,_Proc,_,As}) ->
 				  Call = genname(Id,Ver),
 				  io:format(Fd, "-export([~s/~w,~s/~w]).\n",
 					    [Call,length(As)+1,
@@ -370,7 +379,7 @@ gen_clnt(Fd, Base, Spec) ->
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-gen_svc(Base, Spec, Env, Opts, Type) ->
+gen_svc(Base, Spec, _Env, Opts, Type) ->
     Module = Base ++ "_svc",
     File = Module ++ ".erl",
     case file:open(File, write) of
@@ -423,9 +432,9 @@ gen_svc(Base, Spec, Env, Opts, Type) ->
 
 gen_svc(Fd, Base, Spec, Type) ->
     foreach(
-      fun ({program,Id,Prog,Vs}) ->
+      fun ({program,Id,_Prog,Vs}) ->
 	      foreach(
-		fun({version,_,Ver,Ps}) ->
+		fun({version,_,Ver,_Ps}) ->
 			ProgN = genname(Id,Ver),
 			io:format(Fd, "-export([~s/5]).\n", [ProgN])
 		end, Vs);
@@ -469,12 +478,12 @@ gen_hrl(Base, Spec, Env, Opts) ->
 %%
 %% emit all constant as -define(CONSTANT, Value).
 %%
-gen_hrl(Fd, Base, Spec, Env, Opts) ->
+gen_hrl(Fd, _Base, Spec, Env, _Opts) ->
     foreach(
       fun ({program,Pid,Prog,Vs}) ->
 	      io:format(Fd, "-define(~s, ~w).~n",[Pid,Prog]),
 	      foreach(
-		fun({version,Vid,Ver,Ps}) ->
+		fun({version,Vid,Ver,_Ps}) ->
 			io:format(Fd, "-define(~s, ~w).~n",[Vid,Ver])
 		end, Vs);
 	  (_) -> 
@@ -504,7 +513,7 @@ gen_hrl(Fd, Base, Spec, Env, Opts) ->
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-gen_stub(Base, Spec, Env, Opts) ->
+gen_stub(_Base, _Spec, _Env, _Opts) ->
     nyi.
 
 %%
@@ -526,8 +535,8 @@ fmt_type(float) -> "float";
 fmt_type(double) -> "double";
 fmt_type(string) -> "string";
 fmt_type(opaque) -> "opaque";
-fmt_type({struct,Elems}) -> "struct ...";
-fmt_type({union,{DT,Elems}}) -> "union ...";
+fmt_type({struct,_Elems}) -> "struct ...";
+fmt_type({union,{_DT,_Elems}}) -> "union ...";
 fmt_type({optional,T})   -> fmt_flatt("*~s", [fmt_type(T)]);
 fmt_type({varray,infinity,T}) -> fmt_flatt("~s<>", [fmt_type(T)]);
 fmt_type({varray,N,T})   -> fmt_flatt("~s<~w>", [fmt_type(T),N]);
@@ -547,7 +556,7 @@ transform(Spec, File) ->
     {Spec1,Env} = trans(Spec),
     case get(errors) of
 	0 -> {ok, Spec1, Env};
-	N -> error
+	_N -> error
     end.
 
 %%
@@ -570,7 +579,7 @@ trans([{typedef,Line,Id,Type} | Fs], S0, Env) ->
 	    Env1 = insert(Id,type,current,Env),
 	    Type1 = trans_type(Type, Env1),
 	    trans(Fs, [{type,Id,Type1}|S0], insert(Id,type,Type1,Env));
-	{Id,type,T} ->
+	{Id,type,_T} ->
 	    error(Line, "type ~s multiply defined", [Id]),
 	    trans(Fs, S0, Env);
 	_ ->
@@ -591,25 +600,25 @@ trans([], S0, Env) ->
     { reverse(S0), Env }.
 
 
-trans_vers([{version,Line,Id,VersNo,Procs} | Vs], Env) ->
+trans_vers([{version,_Line,Id,VersNo,Procs} | Vs], Env) ->
     Procs1 = trans_procs(Procs, Env),
     [{version,Id,VersNo,Procs1} | trans_vers(Vs,Env)];
-trans_vers([], Env) -> [].
+trans_vers([], _Env) -> [].
 
-trans_procs([{procedure,Line,Id,ProcNo,Ret,Args} | Ps], Env) ->
+trans_procs([{procedure,_Line,Id,ProcNo,Ret,Args} | Ps], Env) ->
     Ret1 = trans_type(Ret, Env),
     Args1 = trans_type_list(Args, Env),
     [{procedure,Id,ProcNo,Ret1,Args1} | trans_procs(Ps, Env)];
-trans_procs([], Env) -> [].
+trans_procs([], _Env) -> [].
 
 trans_type_list([T | Ts], Env) ->
     [ trans_type(T, Env) | trans_type_list(Ts,Env)];
-trans_type_list([], Env) -> [].
+trans_type_list([], _Env) -> [].
 
 
 trans_type({struct, _, Elems}, Env) ->
     {struct, trans_struct_elems(Elems, [], Env)};
-trans_type({union, Line, {{Did,DLine,Disc}, Elems}}, Env) ->
+trans_type({union, Line, {{Did,_DLine,Disc}, Elems}}, Env) ->
     Disc1 = trans_type(Disc,Env),
     DT = trans_disc_type(Disc1, Line, Env),
     Elems1 = trans_union_elems(Elems, [], [], [], Env, DT),
@@ -645,21 +654,21 @@ trans_type({varray,Line,Max,Type}, Env) ->
 		true -> trans_type(Type, Env)
 	    end,
     {varray, Max1, Type1};
-trans_type({int,_}, Env) -> int;
-trans_type({unsigned_int,_},Env) -> unsigned_int;
-trans_type({hyper,_},Env) -> hyper;
-trans_type({unsigned_hyper,_},Env) -> unsigned_hyper;
-trans_type({float,_},Env) -> float;
-trans_type({double,_},Env) -> double;
-trans_type({bool,_},Env) -> bool;
-trans_type({void,_},Env) -> void;
-trans_type({type,Line,Id}, Env) when is_list(Id) ->
-    case lookup(Id, Env) of
-	{_,type,Type1} -> true;
+trans_type({int,_}, _Env) -> int;
+trans_type({unsigned_int,_},_Env) -> unsigned_int;
+trans_type({hyper,_},_Env) -> hyper;
+trans_type({unsigned_hyper,_},_Env) -> unsigned_hyper;
+trans_type({float,_},_Env) -> float;
+trans_type({double,_},_Env) -> double;
+trans_type({bool,_},_Env) -> bool;
+trans_type({void,_},_Env) -> void;
+trans_type({type,Line,Id}, _Env) when is_list(Id) ->
+    case lookup(Id, _Env) of
+	{_,type,_Type1} -> true;
 	_ -> error(Line, "type ~s undefined", [Id])
     end,
     {type, Id};
-trans_type({optional,Line,Type}, Env) ->
+trans_type({optional,_Line,Type}, Env) ->
     {optional, trans_type(Type, Env)}.
 
 %% trans_type({optional,Line,Type}, Env) ->
@@ -742,10 +751,10 @@ trans_tag_type(Tag,Line,Env,{type,Id}) ->
 trans_tag_type(_, _, _, _) -> {0,0}.
 
 
-trans_disc_type(int, _, Env) -> int;
-trans_disc_type(unsigned_int, _, Env) -> unsigned_int;
-trans_disc_type(bool, _, Env) -> bool;
-trans_disc_type({enum,Nums}, _, Env) ->  {enum,Nums};
+trans_disc_type(int, _, _Env) -> int;
+trans_disc_type(unsigned_int, _, _Env) -> unsigned_int;
+trans_disc_type(bool, _, _Env) -> bool;
+trans_disc_type({enum,Nums}, _, _Env) ->  {enum,Nums};
 trans_disc_type({type,Id}, Line, Env) ->
     case lookup(Id, Env) of
 	{_,type,T} ->
@@ -755,7 +764,7 @@ trans_disc_type({type,Id}, Line, Env) ->
 	    error(Line, "type ~s undefined", [Id]),
 	    int
     end;
-trans_disc_type(T, Line, Env) ->
+trans_disc_type(T, Line, _Env) ->
     error(Line, "type ~s is not a valid discriminator type", [fmt_type(T)]).
 
 %%
@@ -776,7 +785,7 @@ trans_enums([{Tag,Line,Value} | Es], Env, Ids) ->
 trans_enums([], _, _) -> [].
 
 
-trans_value({integer,_,Value}, Env) -> Value;
+trans_value({integer,_,Value}, _Env) -> Value;
 trans_value({identifier,Line,Id}, Env) ->
     case lookup(Id, Env) of
 	{_,const,Value} -> Value;
@@ -788,4 +797,4 @@ insert(Id,Type,Value,Env) ->
 
 lookup(Id, [{Id,Type,Value}|_]) -> {Id,Type,Value};
 lookup(Id, [_|Env]) -> lookup(Id, Env);
-lookup(Id, []) -> false.
+lookup(_Id, []) -> false.
