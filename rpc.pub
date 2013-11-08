@@ -1,7 +1,7 @@
 {name, "rpc"}.
 {vsn, {1,1}}.
 {summary, "ONC/RPC stub generator and library"}.
-{author, "Tony Rogvall", "tony@bluetail.com", "000815"}.
+{author, "Tony Rogvall", "tony@erix.ericsson.se", "970820"}.
 {author, "Scott Fritchie", "scott@sendmail.com", "000815"}.
 {author, "Jim Larson", "jim@sendmail.com", "000815"}.
 {author, "Martin Bjorklund", "mbj@bluetail.com", "001110"}.
