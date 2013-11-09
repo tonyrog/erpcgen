@@ -1,82 +1,75 @@
-%% Copyright (c) 2000 Sendmail, Inc.  All rights reserved.
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%% @author Tony Rogvall <tony@rogvall.se>
+%%% @copyright (C) 2013, Tony Rogvall
 %%
 %% Compile xdr files into erlang modules
 %%
-%% Input:  proto.x
 %%
-%% Output: [ proto_clnt.erl ]
-%%         [ proto_svc.erl ]
-%%         [ proto_xdr.erl ]
-%%         [ proto.hrl ]
-%%         [ proto_stub.erl ]
-%%
-%%        stubb_server.erl.gen  
-%%        stubb_client.erl.gen
-%%
-%% options:   hrl          -- generate proto.hrl
-%%            clnt         -- generate proto_clnt.erl
-%%            svc          -- generate proto_svc.erl, user impl. gen_server
-%%            svc_callback -- generate proto_svc.erl, user impl. rpc_server
-%%            xdr          -- generate proto_xdr.erl
-%%            trace        -- make stubs profilable via 'trace' option
-%%            xdr_inc      -- generate proto_xdr.hrl
-%%            svc_stub     -- generate server server.erl.stub
-%%            client       -- [hrl,clnt,xdr]
-%%            server       -- [hrl,svc,xdr,svc_stub]
-%%            xdrlib       -- [hrl,xdr]
-%%            all          -- [hrl,clnt,svc,xdr,svc_stub]
-%%
-%%
--module(erpcgen).
--behavior(application).
 
--export([start/0, start/2]).
--export([stop/1]).
--export([file/1, file/2, file/3]).
+-mode(compile).
 
--import(lists, [map/2, filter/2, foreach/2, reverse/1]).
--import(lists, [member/2, keysearch/3, concat/1, flatten/1]).
--import(xdrgen, [genname/2]).
--import(xdrgen, [mkfun/1, mkcall/2, mkcall/3, mkcase/2, mkif/1, mkvar/1]).
--import(xdrgen, [mkatom/1, mkatom/2, mkint/1, mkfloat/1, mkop/3, mkop/2]).
--import(xdrgen, [mkclause/3, mktuple/1, mkcons/2, mknil/0, mklist/1]).
--import(xdrgen, [mkmatch/2, mkblock/1, mkmodule/2, mkexport/2]).
--import(xdrgen, [mkfunction/3]).
+-import(lists, [foreach/2, reverse/1]).
 
-%% Called by application startup.
-start() -> start(normal, []).
-start(normal, []) ->
-    {ok, [[InFile]]} = init:get_argument(infile),
-    {ok, [[OutFile]]} = init:get_argument(outfile),
-    {ok, [[OptionsArg]]} = init:get_argument(options),
-    {ok, Scan, _} = erl_scan:string(OptionsArg),
-    {ok, OptList} = erl_parse:parse_term(Scan),
-    case file(list_to_atom(InFile), list_to_atom(OutFile), OptList) of
+main(Args) ->
+    {Opts0,Args1} = get_opts(Args),
+    Opts = if Opts0 =:= [] -> [all]; true -> Opts0 end,
+    IFile = case Args1 of
+		[IFile0] -> IFile0;
+		_ -> usage()
+	    end,
+    InFile = 
+	case filename:extension(IFile) of
+	    ".x" -> filename:basename(IFile, ".x");
+	    ""   -> IFile
+	end,
+    OutFile = case proplists:get_value(o, Opts) of
+		  undefined -> InFile;
+		  OFile0 ->
+		      case filename:extension(OFile0) of
+			  ".x" -> filename:basename(OFile0, ".x");
+			  ""   -> OFile0
+		      end
+	      end,
+    case file(InFile, OutFile, Opts) of
 	[ok,ok,ok,ok,ok] ->
 	    %% io:format("Compilation of ~s successful\n", [InFile]),
-	    {error, 'Compilation successful'};	% For application behavior.
+	    %% {error, 'Compilation successful'};
+	    halt(0);
 	_Error ->
 	    %% Error is too complex to figure out.  Let user figure it out.
-	    {error, 'Compilation failed'}	% For application behavior.
+	    halt(1)
     end.
 
-stop(_State) ->
-    ok.
-    
 
-file(File) ->
-    file(File, [all]).
+usage() ->
+    io:format(
+"usage: erpcgen <options> proto[.x]
 
-file(File, Opts) ->
-    file(File, File, Opts).
+ options:
+    -o <out>      Set output name, default is input base name
+    -hrl          Generate <out>.hrl
+    -clnt         Generate <out>_clnt.erl
+    -svc          Generate <out>_svc.erl, user impl. gen_server
+    -svc_callback Generate <out>_svc.erl, user impl. rpc_server
+    -xdr          Generate <out>_xdr.erl
+    -trace        Make stubs profilable via 'trace' option
+    -xdr_inc      Generate <out>_xdr.hrl
+    -svc_stub     Generate server server.erl.stub (not implemented)
+    -client       == -hrl -clnt -xdr
+    -server       == -hrl -svc -xdr -svc_stub
+    -xdrlib       == -hrl -xdr
+    -all          == -hrl -clnt -svc -xdr -svc_stub
+", []),
+    halt(1).
 
 file(In, Out, Opts) ->
     file1(In, Out, trans_opts(Opts)).
 
 file1(_In, _Out, {error,Reason}) -> {error, Reason};
-file1(In, Out, {ok, Opts}) when is_atom(In), is_atom(Out) ->
-    File = atom_to_list(In) ++ ".x",
-    Base = atom_to_list(Out),
+file1(In, Out, {ok, Opts}) ->
+    File = In ++ ".x",
+    Base = Out,
     case xdr_scan:file(File) of
 	{error, {Line,Where,Reason}} ->
 	    Message = xdr_scan:format_error(Reason),
@@ -101,7 +94,7 @@ file1(In, Out, {ok, Opts}) when is_atom(In), is_atom(Out) ->
     end.
 
 generate(Base, Spec, Env, Opts) ->
-    map(
+    lists:map(
       fun(hrl)  -> gen_hrl(Base, Spec,  Env, Opts);
 	 (clnt) -> gen_clnt(Base, Spec, Env, Opts);
 	 (svc) ->  gen_svc(Base, Spec,  Env, Opts, gen_server);
@@ -112,6 +105,28 @@ generate(Base, Spec, Env, Opts) ->
 	 (_) -> ok
       end, Opts).
     
+%% pickup options from command line
+get_opts(Args) ->
+    get_opts(Args, [], []).
+
+get_opts(["-all"|As], Opts, Acc) ->    get_opts(As, [all|Opts], Acc);
+get_opts(["-client"|As], Opts, Acc) -> get_opts(As, [client|Opts], Acc);
+get_opts(["-server"|As], Opts, Acc) -> get_opts(As, [server|Opts], Acc);
+get_opts(["-xdrlib"|As], Opts, Acc) -> get_opts(As, [xdrlib|Opts], Acc);
+get_opts(["-hrl"|As], Opts, Acc) -> get_opts(As,[hrl|Opts], Acc);
+get_opts(["-clnt"|As], Opts, Acc) -> get_opts(As,[clnt|Opts], Acc);
+get_opts(["-svc"|As], Opts, Acc) -> get_opts(As,[svc|Opts], Acc);
+get_opts(["-svc_callback"|As], Opts, Acc) -> get_opts(As,[svc_callback|Opts], Acc);
+get_opts(["-xdr"|As], Opts, Acc) -> get_opts(As,[xdr|Opts], Acc);
+get_opts(["-xdr_inc"|As], Opts, Acc) -> get_opts(As,[xdr_inc|Opts], Acc);
+get_opts(["-trace"|As], Opts, Acc) -> get_opts(As,[trace|Opts], Acc);
+get_opts(["-svc_stub"|As], Opts, Acc) -> get_opts(As,[svc_stub|Opts], Acc);
+get_opts(["-o",File|As],Opts,Acc) -> get_opts(As,[{o,File}|Opts], Acc);
+get_opts(["-help"|_],_Opts,_Acc) -> usage();
+get_opts(["--help"|_],_Opts,_Acc) -> usage();
+get_opts([A|As], Opts, Acc) -> get_opts(As, Opts, [A|Acc]);
+get_opts([],Opts,Acc) -> 
+    {reverse(Opts), reverse(Acc)}.
 
 trans_opts(Opts) ->
     tr_opts(Opts, []).
@@ -120,42 +135,27 @@ trans_opts(Opts) ->
 
 tr_opts([Opt | Opts], L) ->
     case Opt of
-	all          -> tr_opts(Opts, add_opts([hrl,clnt,svc,xdr,svc_stub],L));
-	client       -> tr_opts(Opts, add_opts([hrl,clnt,xdr],L));
-	server       -> tr_opts(Opts, add_opts([hrl,svc,xdr,svc_stub],L));
-	xdrlib       -> tr_opts(Opts, add_opts([hrl,xdr],L));
-	hrl          -> tr_opts(Opts, add_opt(hrl,L));
-	clnt         -> tr_opts(Opts, add_opt(clnt,L));
-	svc          -> tr_opts(Opts, add_opt(svc,L));
-	svc_callback -> tr_opts(Opts, add_opt(svc_callback,L));
-	xdr          -> tr_opts(Opts, add_opt(xdr,L));
-	xdr_inc      -> tr_opts(Opts, add_opt(xdr_inc,L));
-	trace        -> tr_opts(Opts, add_opt(trace,L));
-	svc_stub     -> tr_opts(Opts, add_opt(svc_stub,L));
-	_            -> {error, {option, Opts}}
+	all          -> tr_opts(Opts, [hrl,clnt,svc,xdr,svc_stub]++L);
+	client       -> tr_opts(Opts, [hrl,clnt,xdr]++L);
+	server       -> tr_opts(Opts, [hrl,svc,xdr,svc_stub]++L);
+	xdrlib       -> tr_opts(Opts, [hrl,xdr]++L);
+	hrl          -> tr_opts(Opts, [hrl|L]);
+	clnt         -> tr_opts(Opts, [clnt|L]);
+	svc          -> tr_opts(Opts, [svc|L]);
+	svc_callback -> tr_opts(Opts, [svc_callback|L]);
+	xdr          -> tr_opts(Opts, [xdr|L]);
+	xdr_inc      -> tr_opts(Opts, [xdr_inc|L]);
+	trace        -> tr_opts(Opts, [trace|L]);
+	svc_stub     -> tr_opts(Opts, [svc_stub|L]);
+	{o,Out}      -> tr_opts(Opts, [{o,Out}|L])
     end;
 tr_opts([], L) -> 
-    case lists:member(svc, L) and lists:member(svc_callback, L) of
+    L1 = lists:usort(L),
+    case lists:member(svc, L1) and lists:member(svc_callback, L1) of
 	true -> {error, {option, [svc, svc_callback]}};
-	false -> {ok,L}
+	false -> {ok,L1}
     end.
 
-add_opt(Opt, L) when is_atom(Opt) ->
-    case member(Opt, L) of
-	true -> L;
-	false -> [Opt | L]
-    end.
-
-add_opts([Opt|Opts], L) ->
-    add_opts(Opts, add_opt(Opt, L));
-add_opts([], L) -> L.
-
-
-%% emit_list(L) ->
-%%     io:format("------------------------------------\n"),
-%%     foreach(fun(E) ->
-%% 		    io:format("~p~n", [E])
-%% 	    end, L).
 %%
 %% Month conversion
 %%
@@ -353,7 +353,7 @@ gen_clnt(Fd, Base, Spec) ->
 		fun({version,_,Ver,Ps}) ->
 			foreach(
 			  fun({procedure,Id,_Proc,_,As}) ->
-				  Call = genname(Id,Ver),
+				  Call = xdrgen:genname(Id,Ver),
 				  io:format(Fd, "-export([~s/~w,~s/~w]).\n",
 					    [Call,length(As)+1,
 					     Call,length(As)+2])
@@ -362,7 +362,7 @@ gen_clnt(Fd, Base, Spec) ->
 	  (_) -> 
 	      true
       end, Spec),
-    put(type_module, list_to_atom(concat([Base,"_xdr"]))),
+    put(type_module, list_to_atom(lists:concat([Base,"_xdr"]))),
     foreach(
       fun ({program,Id,Prog,Vers}) ->
 	      Es = xdrgen:clnt({program,Id,Prog,Vers}, []),
@@ -435,7 +435,7 @@ gen_svc(Fd, Base, Spec, Type) ->
       fun ({program,Id,_Prog,Vs}) ->
 	      foreach(
 		fun({version,_,Ver,_Ps}) ->
-			ProgN = genname(Id,Ver),
+			ProgN = xdrgen:genname(Id,Ver),
 			io:format(Fd, "-export([~s/5]).\n", [ProgN])
 		end, Vs);
 	  (_) -> 
@@ -443,7 +443,7 @@ gen_svc(Fd, Base, Spec, Type) ->
       end, Spec),
     io:format(Fd, "-export([init/1, handle_call/3, handle_cast/2, \n"
 	          "         handle_info/2, terminate/2]).\n", []),
-    put(type_module, list_to_atom(concat([Base,"_xdr"]))),
+    put(type_module, list_to_atom(lists:concat([Base,"_xdr"]))),
     Fs = xdrgen:svc_gen_funcs(Type, Base, []),
     foreach(fun(F) -> emit_fun(Fd, F) end, Fs),
     foreach(
@@ -520,7 +520,7 @@ gen_stub(_Base, _Spec, _Env, _Opts) ->
 %% Transform + Verify
 %%
 error(Line,Fmt,As) ->
-    Mess = flatten(io_lib:format(Fmt, As)),
+    Mess = lists:flatten(io_lib:format(Fmt, As)),
     io:format("~s:~w: error : ~s~n", [get(infile), Line, Mess]),
     put(errors, get(errors)+1).
 
@@ -544,7 +544,7 @@ fmt_type({array,N,T})    -> fmt_flatt("~s[~w]", [fmt_type(T),N]);
 fmt_type({type,Id}) -> Id.
 
 fmt_flatt(Fmt, Args) ->
-    flatten(io_lib:format(Fmt, Args)).
+    lists:flatten(io_lib:format(Fmt, Args)).
 %%
 %% 1 remove line numbers.
 %% 2 check errors.
@@ -682,7 +682,7 @@ trans_type({optional,_Line,Type}, Env) ->
 %%
 trans_struct_elems([{Id, Line, Type} | Elems], Ids, Env) ->
     Type1 = trans_type(Type, Env),
-    case member(Id, Ids) of
+    case lists:member(Id, Ids) of
 	true -> 
 	    error(Line, "struct member ~s multiply defined", [Id]),
 	    [{Id,Type1} | trans_struct_elems(Elems, Ids, Env)];
@@ -697,14 +697,14 @@ trans_struct_elems([], _, _) -> [].
 %%
 trans_union_elems([{Tag,Line,{Id,_,Type}} | Elems],Tags,Ids,Vals,Env,Disc) ->
     Tag1 = trans_tag(Tag),
-    case member(Tag1, Tags) of
+    case lists:member(Tag1, Tags) of
 	true -> error(Line, "union tag ~w multiply defined", [Tag1]);
 	false -> true
     end,
     Ids1 = 
 	if Id == [] -> Ids;
 	    true ->
-		case member(Id, Ids) of
+		case lists:member(Id, Ids) of
 		    true -> error(Line, "union id ~s multiply defined", [Id]),
 			    Ids;
 		    false -> [Id | Ids]
@@ -712,7 +712,7 @@ trans_union_elems([{Tag,Line,{Id,_,Type}} | Elems],Tags,Ids,Vals,Env,Disc) ->
 	end,
     Type1 = trans_type(Type, Env),
     Tag2 = {_,Val} = trans_tag_type(Tag1, Line, Env, Disc),
-    Vals1 = case member(Val, Vals) of
+    Vals1 = case lists:member(Val, Vals) of
 		true -> error(Line, "case ~w multiply defined", [Val]), Vals;
 		false -> [Val | Vals]
 	    end,
@@ -738,7 +738,7 @@ trans_tag_type(N, Line, _, unsigned_int) when is_integer(N) ->
     {N,N};
 trans_tag_type(default, _, _, _) -> {default,default};
 trans_tag_type(Tag, Line,_,{enum,Nums}) ->
-    case keysearch(Tag, 1, Nums) of
+    case lists:keysearch(Tag, 1, Nums) of
 	{value,{_,Value}} -> 
 	    {Tag,Value};
 	false ->
@@ -777,7 +777,7 @@ trans_enum(Enums, Env) ->
 
 trans_enums([{Tag,Line,Value} | Es], Env, Ids) ->
     V = trans_value(Value, Env),
-    case member(Tag, Ids) of
+    case lists:member(Tag, Ids) of
 	true -> error(Line, "enumeration ~s multiply defined", [Tag]);
 	false -> true
     end,
