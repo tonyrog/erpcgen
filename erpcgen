@@ -31,16 +31,13 @@ main(Args) ->
 			  ""   -> OFile0
 		      end
 	      end,
-    case file(InFile, OutFile, Opts) of
-	[ok,ok,ok,ok,ok] ->
-	    %% io:format("Compilation of ~s successful\n", [InFile]),
-	    %% {error, 'Compilation successful'};
-	    halt(0);
-	_Error ->
-	    %% Error is too complex to figure out.  Let user figure it out.
-	    halt(1)
+    Result = file(InFile, OutFile, Opts),
+    case lists:keyfind(error, 1, Result) of
+	true ->
+	    halt(1);
+	false ->
+	    halt(0)
     end.
-
 
 usage() ->
     io:format(
